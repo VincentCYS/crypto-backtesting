@@ -1,26 +1,29 @@
 'use client';
 
 import { format } from 'date-fns';
-import { useEffect, useState } from 'react';
-import {
-  Brush,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis, YAxis
-} from 'recharts';
-import { TIMEFRAME_OPTIONS, TimeframeOption, TRADING_PAIRS } from './constants/constants';
-import { fetchKlineData, KlineData } from './services/binanceService';
+import { useEffect, useRef, useState } from 'react';
+import { Chart } from './components/Chart';
+import { CoinSelector } from './components/CoinSelector';
+import { PerformanceSummary } from './components/PerformanceSummary';
+import { TimeframeSelector } from './components/TimeframeSelector';
+import { TIMEFRAME_OPTIONS, TimeframeOption } from './constants/constants';
+import { fetchKlineData, getAvailableSymbols, KlineData } from './services/binanceService';
 
 interface PnLData {
   coin: string;
   initialPrice: number;
   currentPrice: number;
   pnlPercentage: number;
+  weight?: number;
 }
+
+const calculateWeightedPnL = (data: PnLData[]) => {
+  const defaultWeight = 100 / data.length;
+  return data.reduce((acc, coin) => {
+    const weight = coin.weight ?? defaultWeight;
+    return acc + (coin.pnlPercentage * weight / 100);
+  }, 0);
+};
 
 export default function Home() {
   const [availableCoins, setAvailableCoins] = useState<string[]>([]);
@@ -31,14 +34,43 @@ export default function Home() {
   const [totalPnL, setTotalPnL] = useState<number>(0);
   const [selectedTimeframe, setSelectedTimeframe] = useState<TimeframeOption>(TIMEFRAME_OPTIONS[4]); // Default to 1 Year
   const [brushTimeframe, setBrushTimeframe] = useState<[number, number]>([0, 100]); // Percentage values
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [comparisonCoin, setComparisonCoin] = useState('');
+  const [comparisonCoins, setComparisonCoins] = useState<string[]>([]);
+  const [comparisonPnL, setComparisonPnL] = useState<number>(0);
+  const [comparisonPnlData, setComparisonPnlData] = useState<PnLData[]>([]);
+  const [isComparisonDropdownOpen, setIsComparisonDropdownOpen] = useState(false);
+  const [comparisonSearchTerm, setComparisonSearchTerm] = useState('');
+  const comparisonDropdownRef = useRef<HTMLDivElement>(null);
+  const filteredComparisonCoins = availableCoins.filter(coin =>
+    coin.toLowerCase().includes(comparisonSearchTerm.toLowerCase())
+  );
 
   useEffect(() => {
     // Fetch available coins on component mount
     const fetchCoins = async () => {
-      setAvailableCoins([...TRADING_PAIRS]);
+      const coins = await getAvailableSymbols();
+      setAvailableCoins(coins);
     };
     fetchCoins();
   }, []);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredCoins = availableCoins.filter(coin =>
+    coin.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const handleCoinSelection = async (coin: string) => {
     if (selectedCoins.includes(coin)) {
@@ -48,7 +80,7 @@ export default function Home() {
     }
   };
 
-  const calculatePnL = (results: KlineData[][], selectedCoins: string[]) => {
+  const calculatePnL = (results: KlineData[][], selectedCoins: string[], setPnlData: React.Dispatch<React.SetStateAction<PnLData[]>>, setTotalPnL: React.Dispatch<React.SetStateAction<number>>) => {
     const pnlCalculations = selectedCoins.map((coin, index) => {
       const coinData = results[index];
       const initialPrice = coinData[0].close;
@@ -96,219 +128,219 @@ export default function Home() {
     }
   };
 
+  const handleWeightChange = (portfolio: 1 | 2, coinToUpdate: string, newWeight: number) => {
+    const updatePortfolioWeights = (prevData: PnLData[]) => {
+      const otherCoins = prevData.filter(d => d.coin !== coinToUpdate);
+      const totalOtherWeight = 100 - newWeight;
+      const weightRatio = totalOtherWeight / otherCoins.reduce((sum, coin) => sum + (coin.weight ?? (100 / prevData.length)), 0);
+      
+      return prevData.map(data => {
+        if (data.coin === coinToUpdate) {
+          return { ...data, weight: newWeight };
+        }
+        return { 
+          ...data, 
+          weight: ((data.weight ?? (100 / prevData.length)) * weightRatio)
+        };
+      });
+    };
+
+    if (portfolio === 1) {
+      setPnlData(prev => {
+        const updated = updatePortfolioWeights(prev);
+        const newTotalPnL = calculateWeightedPnL(updated);
+        setTotalPnL(newTotalPnL);
+        return updated;
+      });
+    } else {
+      setComparisonPnlData(prev => {
+        const updated = updatePortfolioWeights(prev);
+        const newComparisonPnL = calculateWeightedPnL(updated);
+        setComparisonPnL(newComparisonPnL);
+        return updated;
+      });
+    }
+
+    // Update chart data with new weights
+    setChartData(prev => prev.map(point => {
+      const newPoint = { ...point };
+      const data = portfolio === 1 ? pnlData : comparisonPnlData;
+      const key = portfolio === 1 ? 'portfolio' : 'comparison';
+      
+      if (point[key] !== undefined) {
+        const weightedPerf = data.reduce((acc, coinData) => {
+          const weight = coinData.coin === coinToUpdate ? newWeight : (coinData.weight ?? (100 / data.length));
+          return acc + (point[`${coinData.coin}_perf`] || 0) * (weight / 100);
+        }, 0);
+        newPoint[key] = weightedPerf;
+      }
+      
+      return newPoint;
+    }));
+  };
+
   useEffect(() => {
     const fetchData = async () => {
-      if (selectedCoins.length === 0) {
+      if (selectedCoins.length === 0 && comparisonCoins.length === 0) {
         setChartData([]);
         setPnlData([]);
+        setComparisonPnlData([]);
         setTotalPnL(0);
+        setComparisonPnL(0);
         return;
       }
 
       setLoading(true);
       try {
-        // First fetch BTC data
-        const btcData = await fetchKlineData(
-          'BTCUSDT',
-          selectedTimeframe.interval,
-          selectedTimeframe.days
-        );
-
-        // Then fetch selected coins data
-        const promises = selectedCoins.map(coin => 
-          fetchKlineData(
-            `${coin}USDT`, 
-            selectedTimeframe.interval, 
-            selectedTimeframe.days
+        // Fetch data for both portfolios
+        const promises = [
+          ...selectedCoins.map(coin => 
+            fetchKlineData(`${coin}USDT`, selectedTimeframe.interval, selectedTimeframe.days)
+          ),
+          ...comparisonCoins.map(coin => 
+            fetchKlineData(`${coin}USDT`, selectedTimeframe.interval, selectedTimeframe.days)
           )
-        );
+        ];
         
         const results = await Promise.all(promises);
         
-        // Calculate PnL
-        calculatePnL(results, selectedCoins);
+        // Calculate PnL for main portfolio
+        if (selectedCoins.length > 0) {
+          const mainResults = results.slice(0, selectedCoins.length);
+          calculatePnL(mainResults, selectedCoins, setPnlData, setTotalPnL);
+        }
+
+        // Calculate PnL for comparison portfolio
+        if (comparisonCoins.length > 0) {
+          const comparisonResults = results.slice(selectedCoins.length);
+          calculatePnL(comparisonResults, comparisonCoins, setComparisonPnlData, setComparisonPnL);
+        }
 
         // Combine all data for chart
-        const combinedData = btcData.map((_:any, timeIndex: number) => {
+        const combinedData = results[0].map((_: any, timeIndex: number) => {
           const dataPoint: any = {
-            date: format(new Date(btcData[timeIndex].timestamp), 'MMM dd yyyy'),
+            date: format(new Date(results[0][timeIndex].timestamp), 'MMM dd yyyy'),
           };
-          
-          // Calculate and store BTC data
-          const btcInitialPrice = btcData[0].close;
-          const btcCurrentPrice = btcData[timeIndex].close;
-          dataPoint.btc = ((btcCurrentPrice - btcInitialPrice) / btcInitialPrice) * 100;
-          dataPoint.btc_price = btcCurrentPrice;
 
-          // Calculate selected coins performance
-          selectedCoins.forEach((coin, coinIndex) => {
-            const initialPrice = results[coinIndex][0].close;
-            const currentPrice = results[coinIndex][timeIndex].close;
-            const performance = ((currentPrice - initialPrice) / initialPrice) * 100;
-            dataPoint[`${coin}_hidden`] = performance;
-            dataPoint[`${coin}_price`] = currentPrice;
-          });
+          // Calculate main portfolio performance
+          if (selectedCoins.length > 0) {
+            selectedCoins.forEach((coin, coinIndex) => {
+              const initialPrice = results[coinIndex][0].close;
+              const currentPrice = results[coinIndex][timeIndex].close;
+              const perf = ((currentPrice - initialPrice) / initialPrice) * 100;
+              dataPoint[`${coin}_perf`] = perf;
+            });
 
-          // Calculate portfolio performance
-          const portfolioPerformance = selectedCoins.reduce((acc, coin) => {
-            return acc + dataPoint[`${coin}_hidden`];
-          }, 0) / selectedCoins.length;
+            const mainPortfolioPerf = pnlData.reduce((acc, coin) => {
+              const weight = coin.weight || 100;
+              const totalWeight = pnlData.reduce((sum, c) => sum + (c.weight || 100), 0);
+              const normalizedWeight = weight / totalWeight;
+              return acc + (dataPoint[`${coin.coin}_perf`] || 0) * normalizedWeight;
+            }, 0);
+            dataPoint.portfolio = mainPortfolioPerf;
+          }
 
-          dataPoint.portfolio = portfolioPerformance;
-          
+          // Calculate comparison portfolio performance
+          if (comparisonCoins.length > 0) {
+            comparisonCoins.forEach((coin, coinIndex) => {
+              const resultIndex = coinIndex + selectedCoins.length;
+              const initialPrice = results[resultIndex][0].close;
+              const currentPrice = results[resultIndex][timeIndex].close;
+              const perf = ((currentPrice - initialPrice) / initialPrice) * 100;
+              dataPoint[`${coin}_perf`] = perf;
+            });
+
+            const comparisonPortfolioPerf = comparisonPnlData.reduce((acc, coin) => {
+              const weight = coin.weight || 100;
+              const totalWeight = comparisonPnlData.reduce((sum, c) => sum + (c.weight || 100), 0);
+              const normalizedWeight = weight / totalWeight;
+              return acc + (dataPoint[`${coin.coin}_perf`] || 0) * normalizedWeight;
+            }, 0);
+            dataPoint.comparison = comparisonPortfolioPerf;
+          }
+
           return dataPoint;
         });
 
         setChartData(combinedData);
-        // Reset brush timeframe when new data is loaded
         setBrushTimeframe([0, combinedData.length - 1]);
       } catch (error) {
-        console.error('Error fetching chart data:', error);
+        console.error('Error fetching data:', error);
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [selectedCoins, selectedTimeframe]);
+  }, [selectedCoins, selectedTimeframe, comparisonCoins]);
 
   return (
-    <div className="min-h-screen p-8">
-      <main className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8">Crypto Backtesting</h1>
-        
-        {/* Timeframe Selection */}
-        <div className="mb-8">
-          <h2 className="text-xl mb-4">Select Timeframe</h2>
-          <div className="flex gap-2">
-            {TIMEFRAME_OPTIONS.map((timeframe) => (
-              <button
-                key={timeframe.label}
-                onClick={() => setSelectedTimeframe(timeframe)}
-                className={`px-4 py-2 rounded-full ${
-                  selectedTimeframe.label === timeframe.label
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-gray-800'
-                }`}
-              >
-                {timeframe.label}
-              </button>
-            ))}
-          </div>
+    <div className="min-h-screen bg-gray-900 text-gray-100">
+      <header className="border-b border-gray-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <h1 className="text-xl font-bold">Crypto Backtesting</h1>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
+          <TimeframeSelector
+            selectedTimeframe={selectedTimeframe}
+            setSelectedTimeframe={setSelectedTimeframe}
+          />
+          <CoinSelector
+            selectedCoins={selectedCoins}
+            handleCoinSelection={handleCoinSelection}
+            isDropdownOpen={isDropdownOpen}
+            setIsDropdownOpen={setIsDropdownOpen}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            filteredCoins={filteredCoins}
+            dropdownRef={dropdownRef}
+
+          />
+          <CoinSelector
+            selectedCoins={comparisonCoins}
+            handleCoinSelection={(coin) => {
+              if (comparisonCoins.includes(coin)) {
+                setComparisonCoins(comparisonCoins.filter(c => c !== coin));
+              } else {
+                setComparisonCoins([...comparisonCoins, coin]);
+              }
+            }}
+            isDropdownOpen={isComparisonDropdownOpen}
+            setIsDropdownOpen={setIsComparisonDropdownOpen}
+            searchTerm={comparisonSearchTerm}
+            setSearchTerm={setComparisonSearchTerm}
+            filteredCoins={filteredComparisonCoins}
+            dropdownRef={comparisonDropdownRef}
+            
+          />
         </div>
 
-        {/* Coin Selection */}
-        <div className="mb-8">
-          <h2 className="text-xl mb-4">Select Cryptocurrencies to Compare</h2>
-          <div className="flex flex-wrap gap-2">
-            {availableCoins.slice(0, 100).map((coin) => (
-              <button
-                key={coin}
-                onClick={() => handleCoinSelection(coin)}
-                className={`px-4 py-2 rounded-full ${
-                  selectedCoins.includes(coin)
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-gray-800'
-                }`}
-              >
-                {coin}
-              </button>
-            ))}
-          </div>
-        </div>
+        {!loading && chartData.length > 0 && (
+          <Chart
+            chartData={chartData}
+            brushTimeframe={brushTimeframe}
+            handleBrushChange={handleBrushChange}
+            comparisonCoin={comparisonCoin}
+          />
+        )}
 
-        {/* PnL Summary */}
         {pnlData.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-xl mb-4">Performance Summary</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Portfolio Performance Card */}
-              <div className="p-4 rounded-lg bg-gray-100 dark:bg-gray-800">
-                <h3 className="text-lg font-semibold mb-2">Portfolio Performance</h3>
-                <p className={`text-2xl font-bold ${totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {totalPnL.toFixed(2)}%
-                </p>
-                {chartData.length > 0 && (
-                  <div className="mt-2">
-                    <h4 className="text-sm text-gray-600 dark:text-gray-400">BTC Performance</h4>
-                    <p className={`text-lg font-semibold ${
-                      chartData[chartData.length - 1].btc >= 0 ? 'text-green-500' : 'text-red-500'
-                    }`}>
-                      {chartData[chartData.length - 1].btc.toFixed(2)}%
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Individual Coin Performance Cards */}
-              {pnlData.map((data) => (
-                <div key={data.coin} className="p-4 rounded-lg bg-gray-100 dark:bg-gray-800">
-                  <h3 className="text-lg font-semibold mb-2">{data.coin}</h3>
-                  <div className="space-y-2">
-                    <p>Initial: ${data.initialPrice.toFixed(2)}</p>
-                    <p>Current: ${data.currentPrice.toFixed(2)}</p>
-                    <p className={`font-bold ${data.pnlPercentage >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                      {data.pnlPercentage.toFixed(2)}%
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <PerformanceSummary
+            pnlData={pnlData}
+            totalPnL={totalPnL}
+            chartData={chartData}
+            comparisonPnlData={comparisonPnlData}
+            comparisonPnL={comparisonPnL}
+            onWeightChange={handleWeightChange}
+          />
         )}
 
         {loading && (
           <div className="flex justify-center items-center h-64">
             <div className="text-lg">Loading...</div>
-          </div>
-        )}
-
-        {!loading && chartData.length > 0 && (
-          <div className="h-[600px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="date" 
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                />
-                <YAxis 
-                  label={{ value: 'Performance %', angle: -90, position: 'insideLeft' }}
-                />
-                <Tooltip 
-                  formatter={(value: number) => [`${value.toFixed(2)}%`, '']}
-                />
-                <Legend />
-                <Line
-                  key="btc"
-                  type="monotone"
-                  dataKey="btc"
-                  stroke="#f7931a"
-                  strokeWidth={2}
-                  dot={false}
-                  name="BTC"
-                />
-                <Line
-                  key="portfolio"
-                  type="monotone"
-                  dataKey="portfolio"
-                  stroke="#2563eb"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Portfolio"
-                />
-                <Brush
-                  dataKey="date"
-                  height={30}
-                  stroke="#8884d8"
-                  onChange={handleBrushChange}
-                  startIndex={brushTimeframe[0]}
-                  endIndex={brushTimeframe[1]}
-                />
-              </LineChart>
-            </ResponsiveContainer>
           </div>
         )}
       </main>
