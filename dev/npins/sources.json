@@ -1,0 +1,29 @@
+{
+  "pins": {
+    "atom": {
+      "type": "Git",
+      "repository": {
+        "type": "GitHub",
+        "owner": "ekala-project",
+        "repo": "atom"
+      },
+      "branch": "master",
+      "revision": "f77fdc488a1ab46d9bd1a8d08fb03f9ef8264c37",
+      "url": "https://github.com/ekala-project/atom/archive/f77fdc488a1ab46d9bd1a8d08fb03f9ef8264c37.tar.gz",
+      "hash": "1s4p6qyc2hnzga3q8szngr6b6bk559mwrvj42gr8mr58rbj01kib"
+    },
+    "nixpkgs": {
+      "type": "Git",
+      "repository": {
+        "type": "GitHub",
+        "owner": "nixos",
+        "repo": "nixpkgs"
+      },
+      "branch": "nixpkgs-unstable",
+      "revision": "2f9d395f057a50f8076f633c10519035fce8d773",
+      "url": "https://github.com/nixos/nixpkgs/archive/2f9d395f057a50f8076f633c10519035fce8d773.tar.gz",
+      "hash": "033zjx8am8ani7lr08c2n3qw1f7zylck0cn6cl9m57qkzqszhbcg"
+    }
+  },
+  "version": 3
+}
