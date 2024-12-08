@@ -1,0 +1,17 @@
+[atom]
+id = "env"
+version = "0.1.0"
+
+[fetch.pkgs]
+args = [{}]
+import = true
+name = "nixpkgs"
+
+[std]
+features = ["lib"]
+
+[backend.nix]
+fetcher = "npins"
+
+[fetcher.npins]
+root = "npins"
